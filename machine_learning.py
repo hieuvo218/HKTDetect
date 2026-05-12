@@ -1,6 +1,8 @@
 import numpy as np
 import math
 
+from scipy import stats
+
 from utility import *
 
 
@@ -38,26 +40,44 @@ class LinearRegressor:
 
 
 class KNearestNeighbors:
-    def __init__(self, num_neighbors: int, p: int, leaf_size: int = 30):
+    def __init__(
+        self,
+        num_neighbors: int,
+        p: int,
+        index: str = "kdtree",   # "kdtree" | "lsh"
+        leaf_size: int = 30,
+        lsh_n_planes: int = 10,
+        lsh_n_tables: int = 5,
+    ):
         self.num_neighbors = num_neighbors
         self.p = p
+        self.index = index
         self.leaf_size = leaf_size
-        self.tree = None
+        self.lsh_n_planes = lsh_n_planes
+        self.lsh_n_tables = lsh_n_tables
+        self._index = None
         self.y = None
 
-    def fit(self, X, y):
+    def fit(self, X: np.ndarray, y: np.ndarray):
         self.y = y
-        self.tree = KdTree(X, self.leaf_size)
+        if self.index == "lsh":
+            self._index = LSHIndex(self.lsh_n_planes, self.lsh_n_tables)
+            self._index.fit(X)
+        else:
+            self._index = KdTree(X, self.leaf_size)
 
-    def predict(self, X: np.ndarray):
-        # query returns indices of nearest neighbors
-        if len(X.shape) < 2:
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if X.ndim < 2:
             X = np.expand_dims(X, axis=0)
 
-        indices = np.array([self.tree.query(x, k=self.num_neighbors) for x in X])
-        all_labels = self.y[indices]
+        if self.index == "lsh":
+            indices = np.array([
+                self._index.query(x, k=self.num_neighbors, p=self.p) for x in X
+            ])
+        else:
+            indices = np.array([
+                self._index.query(x, p=self.p, k=self.num_neighbors) for x in X
+            ])
 
-        from scipy import stats
-        predictions, _ = stats.mode(all_labels, axis=1, keepdims=False)
-        
+        predictions, _ = stats.mode(self.y[indices], axis=1, keepdims=False)
         return predictions.ravel()
