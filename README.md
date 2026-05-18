@@ -11,23 +11,27 @@ Tech stack:
 - DevOps: Docker Compose
 
 ## Start fresh
+Open 3 terminal
+
+at terminal 1, run
 
 ```bash
 docker compose down -v
 docker compose up --build
 ```
 
-Open:
-- Frontend: http://localhost:3000
-- Spring API: http://localhost:8080/api/health
-- ML API: http://localhost:5000/health
-
-## Import MNIST into PostgreSQL
-
-In another terminal:
+at terminal 2, run
 
 ```bash
 docker compose --profile import run --rm mnist-importer
+```
+
+at terminal 3, run
+
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
 ---
