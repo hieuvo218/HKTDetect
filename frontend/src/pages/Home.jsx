@@ -7,6 +7,7 @@ export default function Home() {
   const [pixels, setPixels] = useState(null);
   const [prediction, setPrediction] = useState(null);
   const [trueLabel, setTrueLabel] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
   const [status, setStatus] = useState('Draw a digit. Prediction runs 1s after you stop drawing.');
   const [loading, setLoading] = useState(false);
 
@@ -14,6 +15,7 @@ export default function Home() {
     setPixels(nextPixels);
     setPrediction(null);
     setTrueLabel('');
+    setConfirmed(false);
     if (!nextPixels) {
       setStatus('Canvas cleared.');
       return;
@@ -28,6 +30,7 @@ export default function Home() {
     try {
       const result = await api.predict(nextPixels);
       setPrediction(result);
+      setConfirmed(false);
       setStatus('Prediction ready.');
     } catch (err) {
       setStatus(`Prediction failed: ${err.message}`);
@@ -56,6 +59,7 @@ export default function Home() {
     try {
       await api.confirmPrediction(prediction.predictionId);
       setStatus('Marked as correct.');
+      setConfirmed(true);
     } catch (err) {
       setStatus(`Could not confirm: ${err.message}`);
     }
@@ -82,17 +86,19 @@ export default function Home() {
             <p>Dataset v{prediction.datasetVersion}, samples {prediction.sampleCount}</p>
 
             <div className="actions">
-              <button onClick={confirmCorrect}>Prediction is correct</button>
+              <button onClick={confirmCorrect} disabled={confirmed}>{confirmed ? 'Marked as correct' : 'Prediction is correct'}</button>
             </div>
 
-            <div className="feedback-box">
-              <label>Wrong? Choose true label:</label>
-              <select value={trueLabel} onChange={(e) => setTrueLabel(e.target.value)}>
-                <option value="">Select</option>
-                {[0,1,2,3,4,5,6,7,8,9].map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-              <button disabled={trueLabel === ''} onClick={submitFeedback}>Submit feedback</button>
-            </div>
+            {!confirmed && (
+              <div className="feedback-box">
+                <label>Wrong? Choose true label:</label>
+                <select value={trueLabel} onChange={(e) => setTrueLabel(e.target.value)}>
+                  <option value="">Select</option>
+                  {[0,1,2,3,4,5,6,7,8,9].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <button disabled={trueLabel === ''} onClick={submitFeedback}>Submit feedback</button>
+              </div>
+            )}
           </div>
         ) : (
           <p>No prediction yet.</p>
