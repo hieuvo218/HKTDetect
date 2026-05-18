@@ -9,6 +9,7 @@ export default function Model() {
   const [method, setMethod] = useState('kd_tree');
   const [kText, setKText] = useState('1,3,5,7');
   const [tuneResult, setTuneResult] = useState(null);
+  const [tuneMetric, setTuneMetric] = useState('accuracy');
   const [status, setStatus] = useState('');
 
   async function load() {
@@ -96,6 +97,15 @@ export default function Model() {
           <button onClick={runTune}>Run tune</button>
         </div>
         {tuneResult && (
+          <>
+          <div className="tune-plot-controls" style={{marginBottom:10}}>
+            <label>View metric:</label>
+            <select value={tuneMetric} onChange={e => setTuneMetric(e.target.value)}>
+              <option value="accuracy">Accuracy</option>
+              <option value="f1Score">F1</option>
+              <option value="avgLatencyMs">Latency (ms)</option>
+            </select>
+          </div>
           <table>
             <thead><tr><th>Rank</th><th>k</th><th>Method</th><th>Accuracy</th><th>F1</th><th>Latency</th><th>Train</th><th>Eval</th><th>Action</th></tr></thead>
             <tbody>
@@ -112,6 +122,10 @@ export default function Model() {
               ))}
             </tbody>
           </table>
+          <div style={{marginTop:12}}>
+            <TuneChart results={tuneResult.topResults} metric={tuneMetric} />
+          </div>
+          </>
         )}
       </section>
 
@@ -152,5 +166,66 @@ function ConfusionMatrix({ matrix }) {
         {matrix.map((row, i) => <tr key={i}><th>{i}</th>{row.map((v, j) => <td key={j}>{v}</td>)}</tr>)}
       </tbody>
     </table>
+  );
+}
+
+function TuneChart({ results, metric }) {
+  if (!results || results.length === 0) return <p>No data to plot.</p>;
+
+  // sort by k
+  const rows = [...results].sort((a,b) => a.k - b.k);
+  const values = rows.map(r => r[metric]);
+  const ks = rows.map(r => r.k);
+
+  const width = 480;
+  const height = 180;
+  const pad = 30;
+
+  const vmin = Math.min(...values);
+  const vmax = Math.max(...values);
+  const yrange = vmax - vmin || 1;
+
+  const points = values.map((v, i) => {
+    const x = pad + (i / Math.max(1, values.length - 1)) * (width - pad * 2);
+    const y = pad + (1 - (v - vmin) / yrange) * (height - pad * 2);
+    return `${x},${y}`;
+  }).join(' ');
+
+  return (
+    <div>
+      <svg width={width} height={height} style={{border:'1px solid #eee', background:'#fff'}}>
+        {/* grid lines */}
+        {[0,0.25,0.5,0.75,1].map((g,i) => {
+          const y = pad + g * (height - pad * 2);
+          return <line key={i} x1={pad} x2={width-pad} y1={y} y2={y} stroke="#f0f0f0" />
+        })}
+
+        {/* polyline */}
+        <polyline fill="none" stroke="#2563eb" strokeWidth="2" points={points} />
+
+        {/* points */}
+        {values.map((v,i) => {
+          const coords = points.split(' ')[i].split(',');
+          return <circle key={i} cx={coords[0]} cy={coords[1]} r={4} fill="#fff" stroke="#2563eb" />;
+        })}
+
+        {/* x labels */}
+        {ks.map((k,i) => {
+          const x = pad + (i / Math.max(1, ks.length - 1)) * (width - pad * 2);
+          return <text key={i} x={x} y={height - 6} fontSize={10} textAnchor="middle">{k}</text>;
+        })}
+
+        {/* y labels */}
+        {[0,0.25,0.5,0.75,1].map((g,i) => {
+          const v = vmin + (1 - g) * yrange;
+          const y = pad + g * (height - pad * 2);
+          const label = metric === 'avgLatencyMs' ? `${v.toFixed(1)} ms` : (metric === 'accuracy' || metric === 'f1Score' ? `${(v*100).toFixed(1)}%` : v.toFixed(3));
+          return <text key={i} x={6} y={y+4} fontSize={10}>{label}</text>;
+        })}
+      </svg>
+      <div style={{fontSize:12, color:'#444', marginTop:6}}>
+        <strong>Metric:</strong> {metric} &nbsp; • &nbsp; <strong>k:</strong> {ks.join(', ')}
+      </div>
+    </div>
   );
 }
