@@ -5,18 +5,22 @@ import DigitPreview from '../components/DigitPreview.jsx';
 export default function Database() {
   const [stats, setStats] = useState(null);
   const [samples, setSamples] = useState(null);
+  const [feedbackRows, setFeedbackRows] = useState([]);
+  const [feedbackStatus, setFeedbackStatus] = useState('pending');
   const [label, setLabel] = useState('');
-  const [statusFilter, setStatusFilter] = useState('accepted');
+  const [statusFilter, setStatusFilter] = useState('');
   const [page, setPage] = useState(0);
   const [message, setMessage] = useState('');
 
   async function load(nextPage = page) {
-    const [s, rows] = await Promise.all([
+    const [s, rows, feedback] = await Promise.all([
       api.dbStats(),
       api.dbSamples({ page: nextPage, size: 20, label, status: statusFilter }),
+      api.listFeedback(feedbackStatus),
     ]);
     setStats(s);
     setSamples(rows);
+    setFeedbackRows(feedback);
     setPage(nextPage);
   }
 
@@ -99,6 +103,35 @@ export default function Database() {
           <span>Page {page}</span>
           <button disabled={!samples || (page + 1) * samples.size >= samples.total} onClick={() => load(page + 1)}>Next</button>
         </div>
+      </section>
+
+      <section className="card">
+        <h2>Feedback Submissions</h2>
+        <div className="form-row">
+          <label>Status</label>
+          <select value={feedbackStatus} onChange={e => setFeedbackStatus(e.target.value)}>
+            <option value="pending">pending</option>
+            <option value="rejected">rejected</option>
+            <option value="accepted">accepted</option>
+          </select>
+          <button onClick={() => load(0)}>Load feedback</button>
+        </div>
+
+        {feedbackRows.length === 0 ? (
+          <p>No {feedbackStatus} feedback submissions.</p>
+        ) : (
+          <div className="feedback-grid">
+            {feedbackRows.map(row => (
+              <div className="feedback-card" key={row.id}>
+                <DigitPreview pixels={row.pixels} size={84} />
+                <p>ID #{row.id}</p>
+                <p>Predicted: {row.predictedLabel ?? 'N/A'}</p>
+                <p>True: {row.trueLabel ?? 'N/A'}</p>
+                <p>Status: {row.status}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
       <p className="status">{message}</p>
     </div>
