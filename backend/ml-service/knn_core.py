@@ -380,9 +380,9 @@ def tune_knn(version: int, X_uint8: np.ndarray, y: np.ndarray, sample_count: int
         total_latency = (time.perf_counter() - start) * 1000
         avg_latency = total_latency / max(1, len(y_val))
         acc = float(accuracy_score(y_val, preds))
-        f1 = float(f1_score(y_val, preds, average="macro", zero_division=0))
-        precision = float(precision_score(y_val, preds, average="macro", zero_division=0))
-        recall = float(recall_score(y_val, preds, average="macro", zero_division=0))
+        f1 = float(f1_score(y_val, preds, average="weighted", zero_division=0))
+        precision = float(precision_score(y_val, preds, average="weighted", zero_division=0))
+        recall = float(recall_score(y_val, preds, average="weighted", zero_division=0))
         results.append({
             "k": int(k),
             "method": method,
