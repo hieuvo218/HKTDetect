@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Dict, List
 
 import numpy as np
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 
 @dataclass
@@ -45,44 +47,133 @@ def majority_vote(labels: np.ndarray, distances: np.ndarray | None = None) -> tu
     return pred, confidence
 
 
+class KdTreeNode:
+    def __init__(
+        self,
+        point: np.ndarray,
+        index=None,
+        indices: np.ndarray | None = None,
+        left: "KdTreeNode" | None = None,
+        right: "KdTreeNode" | None = None,
+        axis=None,
+    ):
+        self.left = left
+        self.right = right
+        self.point = point
+        self.axis = axis
+        self.index = index
+        self.indices = indices
+
+
+class KdTree:
+    def __init__(self, X: np.ndarray, leaf_size: int = 10):
+        self.X = X
+        self.k = self.X.shape[1]
+        self.leaf_size = int(leaf_size)
+        self.root = self._build(self.X, np.arange(len(X)), depth=0)
+
+    def _build(self, X: np.ndarray, indices: np.ndarray, depth: int):
+        if len(X) == 0:
+            return None
+
+        if len(X) <= self.leaf_size:
+            return KdTreeNode(point=X, indices=indices)
+
+        axis = depth % self.k
+        sorted_indices = np.argsort(X[:, axis])
+        X_sorted = X[sorted_indices]
+        indices_sorted = indices[sorted_indices]
+
+        median = len(X_sorted) // 2
+        X_1 = X_sorted[:median]
+        X_2 = X_sorted[median + 1 :]
+
+        return KdTreeNode(
+            point=X_sorted[median],
+            index=indices_sorted[median],
+            left=self._build(X_1, indices_sorted[:median], depth + 1),
+            right=self._build(X_2, indices_sorted[median + 1 :], depth + 1),
+            axis=axis,
+        )
+
+    def query(self, x: np.ndarray, p: int = 1, metric: str = "Minkowski", k: int = 1):
+        import heapq
+
+        best = []
+
+        def _distance(x1: np.ndarray, x2: np.ndarray, p: int = 1, metric: str = "Minkowski"):
+            if metric == "Minkowski":
+                return np.linalg.norm(x=x1 - x2, ord=p)
+            return None
+
+        def _search(node: KdTreeNode | None):
+            if node is None:
+                return
+
+            if node.left is None and node.right is None:
+                points = node.point if len(node.point.shape) > 1 else node.point.reshape(1, -1)
+                for i, point in enumerate(points):
+                    d = _distance(x, point, p=p, metric=metric)
+                    idx = node.indices[i]
+
+                    if len(best) < k:
+                        heapq.heappush(best, (-d, idx))
+                    elif -best[0][0] > d:
+                        heapq.heapreplace(best, (-d, idx))
+                return
+
+            d = _distance(x, node.point, p, metric)
+            if len(best) < k:
+                heapq.heappush(best, (-d, node.index))
+            elif -best[0][0] > d:
+                heapq.heapreplace(best, (-d, node.index))
+
+            axis = node.axis
+            diff = x[axis] - node.point[axis]
+
+            if diff < 0:
+                _search(node.left)
+                if len(best) < k or abs(diff) < -best[0][0]:
+                    _search(node.right)
+            else:
+                _search(node.right)
+                if len(best) < k or abs(diff) < -best[0][0]:
+                    _search(node.left)
+
+        _search(self.root)
+
+        result_indices = sorted(
+            [idx for _, idx in best],
+            key=lambda i: _distance(x, self.X[i], p=p, metric=metric),
+        )
+        return np.array(result_indices[:k])
+
+
 class ExactVectorKNN:
-    def __init__(self, n_neighbors: int = 3, chunk_size: int = 8192):
+    def __init__(self, n_neighbors: int = 3, leaf_size: int = 30, chunk_size: int = 8192):
         self.n_neighbors = int(n_neighbors)
+        self.leaf_size = int(leaf_size)
         self.chunk_size = int(chunk_size)
         self.X = None
         self.y = None
+        self._tree = None
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         self.X = np.ascontiguousarray(X, dtype=np.float32)
         self.y = np.asarray(y, dtype=np.uint8)
+        self._tree = KdTree(self.X, leaf_size=self.leaf_size)
         return self
 
     def _nearest_one(self, q: np.ndarray):
         k = min(self.n_neighbors, len(self.y))
-        best_d = np.full(k, np.inf, dtype=np.float32)
-        best_i = np.full(k, -1, dtype=np.int64)
-
-        for start in range(0, self.X.shape[0], self.chunk_size):
-            block = self.X[start:start + self.chunk_size]
-            diff = block - q
-            dists = np.einsum("ij,ij->i", diff, diff, optimize=True)
-
-            if len(dists) <= k:
-                cand_local = np.arange(len(dists))
-            else:
-                cand_local = np.argpartition(dists, k - 1)[:k]
-
-            cand_d = dists[cand_local]
-            cand_i = cand_local + start
-
-            merged_d = np.concatenate([best_d, cand_d])
-            merged_i = np.concatenate([best_i, cand_i])
-            keep = np.argpartition(merged_d, k - 1)[:k]
-            best_d = merged_d[keep]
-            best_i = merged_i[keep]
-
-        order = np.argsort(best_d)
-        return best_i[order], np.sqrt(best_d[order])
+        if k == 0:
+            return np.array([], dtype=np.int64), np.array([], dtype=np.float32)
+        indices = self._tree.query(q, p=2, k=k)
+        if len(indices) == 0:
+            return indices, np.array([], dtype=np.float32)
+        distances = np.linalg.norm(self.X[indices] - q, ord=2, axis=1).astype(np.float32)
+        order = np.argsort(distances)
+        return indices[order], distances[order]
 
     def predict_one(self, q: np.ndarray):
         idx, distances = self._nearest_one(q)
@@ -105,96 +196,77 @@ class ExactVectorKNN:
         return np.vstack(rows)
 
 
-class FastLSHClassifier:
-    def __init__(
-        self,
-        n_neighbors: int = 3,
-        n_planes: int = 12,
-        n_tables: int = 8,
-        candidate_min: int = 256,
-        candidate_max: int = 4096,
-        seed: int = 42,
-    ):
+class LSHIndex:
+    def __init__(self, n_planes: int = 10, n_tables: int = 5, random_state: int = 42):
+        self.n_planes = int(n_planes)
+        self.n_tables = int(n_tables)
+        self.rng = np.random.default_rng(random_state)
+        self.planes = []
+        self.tables = []
+        self.X = None
+
+    def fit(self, X: np.ndarray):
+        self.X = X
+        dim = X.shape[1]
+        self.planes = self.rng.standard_normal((self.n_tables, self.n_planes, dim)).astype(X.dtype)
+
+        for t in range(self.n_tables):
+            projections = X @ self.planes[t].T
+            bits = (projections >= 0).astype(np.uint8)
+            table = {}
+            for i, b in enumerate(bits):
+                key = b.tobytes()
+                table.setdefault(key, []).append(i)
+            self.tables.append(table)
+        return self
+
+    def query(self, x: np.ndarray, k: int, p: int = 2) -> np.ndarray:
+        candidates = set()
+        for t, table in enumerate(self.tables):
+            bits = (x @ self.planes[t].T >= 0).astype(np.uint8)
+            key = bits.tobytes()
+            candidates.update(table.get(key, []))
+
+        if not candidates:
+            candidates = set(range(len(self.X)))
+
+        cands = np.array(list(candidates), dtype=np.int64)
+        if len(cands) == 0:
+            return np.array([], dtype=np.int64)
+        dists = np.linalg.norm(self.X[cands] - x, ord=p, axis=1)
+
+        top_k_idx = np.argpartition(dists, min(k, len(dists)) - 1)[:k]
+        top_k = cands[top_k_idx[np.argsort(dists[top_k_idx])]]
+
+        return top_k
+
+
+class LSHIndexClassifier:
+    def __init__(self, n_neighbors: int = 3, n_planes: int = 10, n_tables: int = 5, seed: int = 42):
         self.n_neighbors = int(n_neighbors)
         self.n_planes = int(n_planes)
         self.n_tables = int(n_tables)
-        self.candidate_min = int(candidate_min)
-        self.candidate_max = int(candidate_max)
         self.seed = int(seed)
-        self.planes = None
-        self.tables = []
+        self.index = None
         self.X = None
         self.y = None
-        self.rng = np.random.default_rng(seed)
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         self.X = np.ascontiguousarray(X, dtype=np.float32)
         self.y = np.asarray(y, dtype=np.uint8)
-        dim = self.X.shape[1]
-        self.rng = np.random.default_rng(self.seed)
-        self.planes = self.rng.standard_normal((self.n_tables, self.n_planes, dim)).astype(np.float32)
-        self.tables = []
-
-        for t in range(self.n_tables):
-            projections = self.X @ self.planes[t].T
-            bits = projections >= 0
-            codes = self._bits_to_codes(bits)
-            table = {}
-            for idx, code in enumerate(codes):
-                table.setdefault(int(code), []).append(idx)
-            self.tables.append(table)
+        self.index = LSHIndex(self.n_planes, self.n_tables, self.seed).fit(self.X)
         return self
 
-    def _bits_to_codes(self, bits: np.ndarray) -> np.ndarray:
-        bits = np.asarray(bits, dtype=np.uint64)
-        shifts = np.arange(bits.shape[1], dtype=np.uint64)
-        return np.sum(bits << shifts, axis=1, dtype=np.uint64)
-
-    def _code_one(self, q: np.ndarray, table_idx: int) -> int:
-        bits = (q @ self.planes[table_idx].T) >= 0
-        return int(self._bits_to_codes(bits.reshape(1, -1))[0])
-
-    def _candidate_indices(self, q: np.ndarray) -> np.ndarray:
-        candidates = set()
-        mask_values = [1 << i for i in range(self.n_planes)]
-
-        for t, table in enumerate(self.tables):
-            code = self._code_one(q, t)
-            candidates.update(table.get(code, []))
-
-        if len(candidates) < self.candidate_min:
-            for t, table in enumerate(self.tables):
-                code = self._code_one(q, t)
-                for mask in mask_values:
-                    candidates.update(table.get(code ^ mask, []))
-                    if len(candidates) >= self.candidate_max:
-                        break
-                if len(candidates) >= self.candidate_max:
-                    break
-
-        if not candidates:
-            size = min(self.candidate_max, self.X.shape[0])
-            return self.rng.choice(self.X.shape[0], size=size, replace=False).astype(np.int64)
-
-        arr = np.fromiter(candidates, dtype=np.int64)
-        if len(arr) > self.candidate_max:
-            arr = self.rng.choice(arr, size=self.candidate_max, replace=False).astype(np.int64)
-        return arr
-
     def _nearest_one(self, q: np.ndarray):
-        cands = self._candidate_indices(q)
-        k = min(self.n_neighbors, len(cands))
-        block = self.X[cands]
-        diff = block - q
-        sq_dists = np.einsum("ij,ij->i", diff, diff, optimize=True)
-        if len(sq_dists) <= k:
-            local = np.arange(len(sq_dists))
-        else:
-            local = np.argpartition(sq_dists, k - 1)[:k]
-        order = np.argsort(sq_dists[local])
-        nearest = cands[local[order]]
-        distances = np.sqrt(sq_dists[local[order]])
-        return nearest, distances
+        k = min(self.n_neighbors, len(self.y))
+        if k == 0:
+            return np.array([], dtype=np.int64), np.array([], dtype=np.float32)
+        indices = self.index.query(q, k=k, p=2)
+        if len(indices) == 0:
+            return indices, np.array([], dtype=np.float32)
+        distances = np.linalg.norm(self.X[indices] - q, ord=2, axis=1).astype(np.float32)
+        order = np.argsort(distances)
+        return indices[order], distances[order]
 
     def predict_one(self, q: np.ndarray):
         idx, distances = self._nearest_one(q)
@@ -225,7 +297,7 @@ def build_model(version: int, X_uint8: np.ndarray, y: np.ndarray, k: int, method
 
     X = normalize_X(X_uint8)
     if method == "lsh":
-        model = FastLSHClassifier(n_neighbors=k).fit(X, y)
+        model = LSHIndexClassifier(n_neighbors=k).fit(X, y)
     else:
         model = ExactVectorKNN(n_neighbors=k).fit(X, y)
 
@@ -271,6 +343,8 @@ def balanced_indices(y: np.ndarray, total: int, seed: int = 42) -> np.ndarray:
 
 
 def tune_knn(version: int, X_uint8: np.ndarray, y: np.ndarray, sample_count: int, method: str, k_values: List[int]):
+    # Currently only tunes k (n_neighbors). LSH has additional parameters (n_planes, n_tables)
+    # and kd-tree has leaf_size that could be tuned for better performance optimization.
     method = "lsh" if method == "lsh" else "kd_tree"
     sample_count = int(sample_count or 500)
     sample_count = max(20, min(sample_count, len(y)))
@@ -295,8 +369,10 @@ def tune_knn(version: int, X_uint8: np.ndarray, y: np.ndarray, sample_count: int
     for k in sorted(set(int(v) for v in k_values if int(v) > 0)):
         k_eff = min(k, len(y_train))
         if method == "lsh":
-            model = FastLSHClassifier(n_neighbors=k_eff).fit(X_train, y_train)
+            # LSH parameters n_planes=10, n_tables=5 are hardcoded; consider as tuning candidates for future work
+            model = LSHIndexClassifier(n_neighbors=k_eff).fit(X_train, y_train)
         else:
+            # KdTree leaf_size=30 is hardcoded; could be tuned for different dataset sizes
             model = ExactVectorKNN(n_neighbors=k_eff).fit(X_train, y_train)
 
         start = time.perf_counter()
@@ -304,12 +380,16 @@ def tune_knn(version: int, X_uint8: np.ndarray, y: np.ndarray, sample_count: int
         total_latency = (time.perf_counter() - start) * 1000
         avg_latency = total_latency / max(1, len(y_val))
         acc = float(accuracy_score(y_val, preds))
-        f1 = float(f1_score(y_val, preds, average="macro", zero_division=0))
+        f1 = float(f1_score(y_val, preds, average="weighted", zero_division=0))
+        precision = float(precision_score(y_val, preds, average="weighted", zero_division=0))
+        recall = float(recall_score(y_val, preds, average="weighted", zero_division=0))
         results.append({
             "k": int(k),
             "method": method,
             "accuracy": acc,
             "f1Score": f1,
+            "precision": precision,
+            "recall": recall,
             "avgLatencyMs": float(avg_latency),
             "trainingSamples": int(len(y_train)),
             "evaluatedSamples": int(len(y_val)),
