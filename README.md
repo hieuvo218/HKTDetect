@@ -4,6 +4,8 @@ A hand written digit classifier using K-nn supporting two index backends: **KD-T
 
 [![Demo Video](https://img.youtube.com/vi/8Y6O81lDHtw/0.jpg)](https://www.youtube.com/watch?v=8Y6O81lDHtw)
 
+**For details, consider the report HKTDetect.pdf**
+
 Tech stack:
 - Frontend: React + Vite
 - Backend: Spring Boot Java 17
